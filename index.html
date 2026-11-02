@@ -74,6 +74,15 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
 input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;background:#fff;border:3px solid var(--ac);cursor:pointer}
 .swatch{display:inline-block;width:10px;height:10px;border-radius:3px;vertical-align:middle;margin-inline-start:6px;border:1px solid rgba(255,255,255,.3)}
 input[type=file]{display:none}
+.urlrow{display:flex;gap:6px;margin-top:8px}
+.urlrow input{flex:1;min-width:0;direction:ltr;text-align:left;background:var(--panel2);color:var(--tx);
+  border:1px solid var(--line);border-radius:11px;padding:10px 12px;font:inherit;font-size:13px;outline:0;transition:.18s}
+.urlrow input::placeholder{color:var(--mut);opacity:.8}
+.urlrow input:focus{border-color:var(--ac)}
+.urlrow .btn{width:auto;padding:10px 14px;flex:none}
+.urlrow .btn.busy{opacity:.55;pointer-events:none}
+.or{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--mut);margin:10px 0 0}
+.or::before,.or::after{content:"";flex:1;height:1px;background:var(--line)}
 .toast{position:fixed;bottom:22px;left:50%;transform:translate(-50%,30px);opacity:0;background:#1d2230;border:1px solid var(--line);
   padding:10px 18px;border-radius:999px;font-size:13px;transition:.3s;pointer-events:none;display:flex;gap:8px;align-items:center;z-index:9}
 .toast.show{opacity:1;transform:translate(-50%,0)}
@@ -97,7 +106,7 @@ input[type=file]{display:none}
             <div class="box">
               <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v3a1 1 0 001 1h14a1 1 0 001-1v-3"/></svg>
               <b>اسحب صورة الخلفية هنا</b>
-              <span>أو اضغط للاختيار، أو الصق صورة بـ Ctrl+V</span>
+              <span>أو اضغط للاختيار، أو الصق صورة / رابط بـ Ctrl+V</span>
             </div>
           </div>
         </div>
@@ -109,6 +118,11 @@ input[type=file]{display:none}
       <div class="sec">
         <h3>الخلفية</h3>
         <button class="btn pri" id="pick"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>رفع صورة</button>
+        <div class="or">أو من رابط</div>
+        <div class="urlrow">
+          <input id="url" type="url" inputmode="url" placeholder="https://example.com/image.jpg" autocomplete="off" spellcheck="false">
+          <button class="btn" id="urlGo" title="تحميل"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 007.07 0l3-3a5 5 0 00-7.07-7.07l-1.5 1.5"/><path d="M14 11a5 5 0 00-7.07 0l-3 3a5 5 0 007.07 7.07l1.5-1.5"/></svg></button>
+        </div>
         <div class="fname" id="fname">لم يتم اختيار صورة</div>
         <input id="file" type="file" accept="image/*">
       </div>
@@ -246,13 +260,66 @@ function computeAccent(){
 }
 
 function toast(t){const e=$("toast");$("toastT").textContent=t;e.classList.add("show");clearTimeout(toast.t);toast.t=setTimeout(()=>e.classList.remove("show"),2200)}
+function setWP(i,label){
+  wp=i;px=py=.5;computeAccent();$("empty").classList.add("hide");
+  $("fname").textContent="\u2066"+label+"\u2069  ·  "+i.naturalWidth+"\u00d7"+i.naturalHeight;render();
+}
 function loadFile(f){
   if(!f||!f.type.startsWith("image/"))return;
   const i=new Image();
-  i.onload=()=>{wp=i;px=py=.5;computeAccent();$("empty").classList.add("hide");
-    $("fname").textContent="\u2066"+(f.name||"pasted image")+"\u2069  ·  "+i.naturalWidth+"\u00d7"+i.naturalHeight;render()};
+  i.onload=()=>setWP(i,f.name||"pasted image");
   i.src=URL.createObjectURL(f);
 }
+
+/* load by URL.
+   Canvas export / getImageData need a non-tainted image, so we need CORS.
+   1) direct (crossOrigin=anonymous)  2) fetch->blob  3) CORS-enabled image proxy */
+const tryImg=src=>new Promise((ok,no)=>{
+  const i=new Image();i.crossOrigin="anonymous";
+  i.onload=()=>ok(i);i.onerror=()=>no(new Error("img"));i.src=src;
+});
+async function viaFetch(u){
+  const r=await fetch(u,{mode:"cors"});
+  if(!r.ok)throw new Error("http");
+  const b=await r.blob();
+  if(!b.type.startsWith("image/"))throw new Error("type");
+  const o=URL.createObjectURL(b);
+  try{return await tryImg(o)}catch(e){URL.revokeObjectURL(o);throw e}
+}
+function normURL(s){
+  s=(s||"").trim().replace(/^["'<]+|["'>]+$/g,"");
+  if(!s||/\s/.test(s))return null;
+  if(/^data:image\//i.test(s))return s;
+  if(!/^https?:\/\//i.test(s)){
+    if(!/^[\w-]+(\.[\w-]+)+(:\d+)?([\/?#]|$)/.test(s))return null;
+    s="https://"+s;
+  }
+  try{return new URL(s).href}catch(e){return null}
+}
+let urlBusy=false;
+async function loadURL(raw){
+  const u=normURL(raw);
+  if(!u){toast("رابط غير صالح");return}
+  if(urlBusy)return;
+  urlBusy=true;$("urlGo").classList.add("busy");toast("جاري تحميل الصورة…");
+  const tries=[
+    ()=>tryImg(u),
+    ()=>viaFetch(u),
+    ()=>tryImg("https://images.weserv.nl/?url="+encodeURIComponent(u))
+  ];
+  let img=null;
+  if(u.startsWith("data:"))tries.length=1;
+  for(const t of tries){try{img=await t();break}catch(e){}}
+  urlBusy=false;$("urlGo").classList.remove("busy");
+  if(!img){toast("تعذّر تحميل الصورة، تأكد أن الرابط مباشر لصورة");return}
+  let label;
+  try{const p=new URL(u);label=p.hostname+(p.pathname.split("/").filter(Boolean).pop()?"/"+decodeURIComponent(p.pathname.split("/").filter(Boolean).pop()):"")}
+  catch(e){label="image"}
+  setWP(img,label.length>40?label.slice(0,37)+"…":label);
+  $("url").value="";toast("تم تحميل الصورة");
+}
+$("urlGo").onclick=()=>loadURL($("url").value);
+$("url").addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();loadURL(e.target.value)}});
 $("pick").onclick=()=>$("file").click();
 $("empty").onclick=()=>$("file").click();
 $("file").onchange=e=>{loadFile(e.target.files[0]);e.target.value=""};
@@ -260,8 +327,18 @@ $("file").onchange=e=>{loadFile(e.target.files[0]);e.target.value=""};
 /* drag & drop + paste */
 ["dragenter","dragover"].forEach(ev=>window.addEventListener(ev,e=>{e.preventDefault();screen.classList.add("drag");$("empty").classList.remove("hide")}));
 ["dragleave","drop"].forEach(ev=>window.addEventListener(ev,e=>{e.preventDefault();screen.classList.remove("drag");if(wp)$("empty").classList.add("hide")}));
-window.addEventListener("drop",e=>loadFile(e.dataTransfer.files[0]));
-window.addEventListener("paste",e=>{for(const it of e.clipboardData.items)if(it.type.startsWith("image/")){loadFile(it.getAsFile());break}});
+window.addEventListener("drop",e=>{
+  const dt=e.dataTransfer;
+  if(dt.files&&dt.files[0])return loadFile(dt.files[0]);
+  const t=dt.getData("text/uri-list")||dt.getData("text/plain");   // image dragged from another tab
+  if(t)loadURL(t.split("\n").find(l=>l&&l[0]!=="#")||t);
+});
+window.addEventListener("paste",e=>{
+  if(e.target&&e.target.tagName==="INPUT")return;                   // let the URL box handle its own paste
+  for(const it of e.clipboardData.items)if(it.type.startsWith("image/")){loadFile(it.getAsFile());return}
+  const t=e.clipboardData.getData("text");
+  if(t&&normURL(t))loadURL(t);
+});
 
 /* controls */
 function seg(id,cb){const s=$(id);s.onclick=e=>{const b=e.target.closest("button");if(!b)return;
